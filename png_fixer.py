@@ -1,5 +1,6 @@
 import binascii
 import sys
+import png
 
 # Constant file header
 FILE_HEADER = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a"
@@ -50,15 +51,11 @@ def repair_magicbytes(data: bytes) -> bytes:
 def parse_chunks(data: bytes, offset: int):
     """Parse the chunk at a given offset"""
 
-    # First 4 bytes
     chunkLength = data[offset: offset + 4]
     length = int.from_bytes(chunkLength, "big")
 
-    # 4th to 8th bytes
     chunkType = data[offset + 4 : offset + 8]
-    # 8th to length bytes
     chunkData = data[offset + 8 : offset + length + 8]
-    # length to (length + 4) bytes
     chunkCRC = data[offset + length + 8: offset + length + 12]
     crc = int.from_bytes(chunkCRC, "big")
 
@@ -82,7 +79,6 @@ def parse_chunks(data: bytes, offset: int):
 def repair_chunk_type(data: bytes, offset: int) -> bytes:
     """Replace the chunk type for a given chunk"""
 
-    # [Part1 | chunktype | part2]
     part1 = data[:offset + 4]
     chunkType = data[offset + 4: offset + 8]
     part2 = data[offset + 8:]
@@ -91,19 +87,18 @@ def repair_chunk_type(data: bytes, offset: int) -> bytes:
     print("Current type :", chunkType)
     print("Possible choices :", PNG_CHUNKS_TYPE)
 
-    header = input("Enter the header manually : ").encode()
+    header = input("Enter the header manually or enter 0 to save and exit: ").encode()
+
+    if header == b'0':
+        save_and_exit(data)
 
     if len(header) != 4:
         print("Wrong header type length. Exiting.")
         exit(1)
 
-    # Replace the old header by the user-input header
     return part1 + header + part2
 
 def repair_chunk_crc(content: bytes, offset: int) -> bytes:
-    """Calculate and replace the CRC for a given chunk"""
-
-    # [Part1 | CRC | part2]    
     chunkLength = content[offset: offset + 4]
     length = int.from_bytes(chunkLength, "big")
 
@@ -122,8 +117,6 @@ def repair_chunk_crc(content: bytes, offset: int) -> bytes:
     return part1 + c2 + part2
 
 def repair_chunk_length(content: bytes, offset: int) -> bytes:
-    """Attempts to repair a chunk's length by crawling for the next type chunk in the data"""
-
     part1 = content[:offset]
     part2 = content[offset + 4:]
     data = content[offset + 8:]
@@ -135,15 +128,12 @@ def repair_chunk_length(content: bytes, offset: int) -> bytes:
             index = i
 
     print("Found another chunk, resizing...")
-    # We need the index before the next chunk, not the next chunk.
     index = index - 8
     index = index.to_bytes(4, "big")
 
     return part1 + index + part2
 
 def parse_and_repair_magicbytes(content: bytes) -> [bytes, int]:
-    """Try to parse the magicbytes and handle the errors"""
-
     new_offset = validate_magicbytes(content)
     if new_offset == 0:
         content = repair_magicbytes(content)
@@ -152,37 +142,35 @@ def parse_and_repair_magicbytes(content: bytes) -> [bytes, int]:
     return content, new_offset
 
 def parse_and_repair_chunk(content: bytes, offset: int) -> [bytes, int]:
-    """Try to parse one chunk and handle the related errors"""
-
     new_offset = parse_chunks(content, offset)
     if new_offset == 0:
-        # Invalid type
         content = repair_chunk_type(content, offset)
         print("Retrying...")
         new_offset = parse_chunks(content, offset)
     
     if new_offset == -2:
-        # Invalid length
         content = repair_chunk_length(content, offset)
         print("Retrying...")
         new_offset = parse_chunks(content, offset)
 
     if new_offset == -1:
-        # Invalid CRC
         content = repair_chunk_crc(content, offset)
         print("Retrying...")
         new_offset = parse_chunks(content, offset)
     return content, new_offset
 
-def parse():
-    """Run the """
+def save_and_exit(content):
+    """Save current content to a PNG file and exit"""
+    with open(sys.argv[2], "wb") as f:
+        f.write(content)
+    print("File saved as", sys.argv[2])
+    exit(0)
 
-    # Validate arguments count
+def parse():
     if len(sys.argv) != 3:
         print("Usage : png_parser.py <input.png> <output.png>")
         exit(0)
 
-    # Dump PNG in a buffer
     content = None
     with open(sys.argv[1], "rb") as f:
         content = f.read()
@@ -190,7 +178,6 @@ def parse():
     content, offset = parse_and_repair_magicbytes(content)
     print(SPLITTER)
 
-    # While the PNG has not been completly parsed
     while offset + 1 != len(content):
         content, offset = parse_and_repair_chunk(content, offset)
         print(SPLITTER)
